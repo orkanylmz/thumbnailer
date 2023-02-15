@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Thumbnailer API.
+
+Globals:
+  Function:
+    Timeout: 300
+    Runtime: go1.x
+    Environment:
+      Variables:
+        BUCKET_NAME: thumbnailer-video-sources
+        REGION: us-east-1
+    Architectures:
+      - x86_64
+  Api:
+    TracingEnabled: true
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'content-type'"
+      AllowOrigin: "'*'"
+
+Resources:
+  ThumbnailerAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: thumbnailer-api
+      StageName: dev
+
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: "upload"
+      CodeUri: ./cmd/functions/upload/
+      Handler: upload
+      Events:
+        CatchAll:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ThumbnailerAPI
+            Path: /upload
+            Method: POST
+      Policies:
+        - Statement:
+            - Sid: AllObjectActions
+              Effect: Allow
+              Action:
+                - s3:*Object
+              Resource: arn:aws:s3:::thumbnailer-video-sources/*
+    Metadata:
+      BuildProperties:
+        TrimGoPath: True
+
+  GenerateThumbnailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: "thumbnailer"
+      CodeUri: ./cmd/functions/generate_thumbnail/
+      Handler: generate_thumbnail
+      Environment:
+        Variables:
+          OUTPUT_BUCKET_NAME: thumbnailer-thumbnails
+      Events:
+        CatchAll:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ThumbnailerAPI
+            Path: /generate
+            Method: POST
+      Policies:
+        - Statement:
+            - Sid: AllObjectActions
+              Effect: Allow
+              Action:
+                - s3:*Object
+              Resource: arn:aws:s3:::thumbnailer-video-sources/*
+        - Statement:
+            - Sid: AllObjectActions
+              Effect: Allow
+              Action:
+                - s3:*Object
+              Resource: arn:aws:s3:::thumbnailer-thumbnails/*
+    Metadata:
+      BuildProperties:
+        TrimGoPath: True
+
+  GetThumbnailsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: "get_thumbnails"
+      CodeUri: ./cmd/functions/get_thumbnails/
+      Handler: get_thumbnails
+      Environment:
+        Variables:
+          OUTPUT_BUCKET_NAME: thumbnailer-thumbnails
+      Events:
+        CatchAll:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ThumbnailerAPI
+            Path: /thumbnails/{name}
+            Method: GET
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: arn:aws:s3:::thumbnailer-thumbnails
+        - Statement:
+            - Sid: AllObjectActions
+              Effect: Allow
+              Action:
+                - s3:*
+              Resource: arn:aws:s3:::thumbnailer-thumbnails/*
+    Metadata:
+      BuildProperties:
+        TrimGoPath: True
+
+  ApplicationResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name:
+        Fn::Join:
+          - ''
+          - - ApplicationInsights-SAM-
+            - Ref: AWS::StackName
+      ResourceQuery:
+        Type: CLOUDFORMATION_STACK_1_0
+
+  ApplicationInsightsMonitoring:
+    Type: AWS::ApplicationInsights::Application
+    Properties:
+      ResourceGroupName:
+        Fn::Join:
+          - ''
+          - - ApplicationInsights-SAM-
+            - Ref: AWS::StackName
+      AutoConfigurationEnabled: 'true'
+    DependsOn: ApplicationResourceGroup
+
+Outputs:
+  WebEndpoint:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${ThumbnailerAPI}.execute-api.${AWS::Region}.amazonaws.com/dev/"
